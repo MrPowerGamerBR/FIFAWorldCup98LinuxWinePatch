@@ -5,13 +5,13 @@
 <img width="320" height="240" alt="20260905_181744_Wine Desktop" src="https://github.com/user-attachments/assets/bdeb5430-e767-4ad0-87de-5726dc350cc2" />
 <img width="320" height="240" alt="20260905_181757_Wine Desktop" src="https://github.com/user-attachments/assets/674f9736-1639-46e3-a2c2-2f3b1bc5e129" />
 
-This is a executable patch for FIFA World Cup 98 to make it work under Linux + Wine.
+This is a executable patch for FIFA World Cup 98 and FIFA Road to World Cup 98 to make it work under Linux + Wine.
 
 You can download the patched executable from the [Releases](https://github.com/MrPowerGamerBR/FIFAWorldCup98LinuxWinePatch/releases) tab.
 
 ## Issues
 
-* Cutscenes SOMETIMES do not work (they just get skipped instead of playing).
+* Cutscenes SOMETIMES do not work (they just get skipped instead of playing) and, for FIFA Road to World Cup 98, cutscenes don't work altogether.
 * Sadly it still doesn't work on Windows 11.
 
 ## How it Works
@@ -24,7 +24,7 @@ Another thing that pointed to a race condition was that Wine complained about wa
 06b4:err:sync:RtlpWaitForCriticalSection section 7BD00300 "../wine/dlls/ntdll/loader.c: loader_section" wait timed out in thread 06b4, blocked by 06ac, retrying (60 sec)
 ```
 
-So, just for funsies, I tried using Claude Fable to help me debug the issue. While Claude helped me figure out how to fix the issue, **the fix on the release page and the write up is entirely written by myself**, because I wanted to *learn* how to fix the issue.
+So, just for funsies, I tried using Claude Fable to help me debug the issue. While Claude helped me figure out how to fix the issue, **the fix on the release page and the write up is entirely written by myself**, because I wanted to *learn* how to fix the issue. The FIFA Road to World Cup 98 patch was also written entirely by myself without any help.
 
 How can we figure out what that thread is doing? Thankfully Wine has some [very comprehensive debugging channels](https://gitlab.winehq.org/wine/wine/-/wikis/Debug-Channels), so if we run it with `WINEDEBUG=+relay,+timestamp`, we can know what's going on behind the scenes
 
@@ -197,4 +197,14 @@ In a hex editor (I used ImHex), replace the `6a 00 53 2e ff 15 9c 85 55 00` sequ
 
 And that's all there's to it! :)
 
-The Road to World Cup game has the same lock up issue, but I haven't made a fix for it yet, but with these instructions you probably can get it working too.
+The FIFA Road to World Cup 98 has the same lock up issue, I tried applying the same fix to it and, while it works *sometimes*, some other times it crashes with "SHOWDCT: No DCT chunks found!".
+
+A very hacky solution for this is to just... not call the function that handles the DCT chunks.
+
+To find it, I searched on Ghidra for `SHOWDCT`, then I found where it is called from. Thankfully there is only one caller.
+
+Then, to no-op it, just replace `e8 49 fc ff ff` with `90 90 90 90 90`.
+
+This does have the caveat that the game won't play cutscenes anymore, but it does fix the crash!
+
+Probably there are better way to fix both games, considering that the issue seems to both be related to cutscenes, but for now, this shall do.
