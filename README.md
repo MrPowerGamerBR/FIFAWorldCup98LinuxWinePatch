@@ -16,7 +16,7 @@ You can download the patched executable from the [Releases](https://github.com/M
 
 ## How it Works
 
-Some months ago I knew that it was probably a race condition because setting the process to ONLY use a single core and to enable `WINEDEBUG=+thread` made the game lock up... less. And if there's a making things slow makes it work smoke, then there's a race condition fire somewhere.
+Some months ago I knew that it was probably a race condition because setting the process to ONLY use a single core and to enable `WINEDEBUG=+thread` made the game lock up... less. And if there's a *making things slow makes it work* smoke, then there's a *race condition* fire somewhere.
 
 Another thing that pointed to a race condition was that Wine complained about wait timeouts when the game locked up.
 
@@ -108,9 +108,11 @@ If we look around that, do we have anything suspicious?
 21094.617:062c:Ret  PE DLL (proc=79DFE9C0,module=79DF0000 L"combase.dll",reason=THREAD_DETACH,res=00000000) retval=1
 ```
 
-Oh... why is that thread (`0608`) terminating another thread suspiciously near where the `062c` thread stops working... We could assume that it is killing our thread, but let's figure it out if it is really `0608` the one that's assassinating at COLD BLOOD the thread. To track it down, we need to figure out how to convert the `ThreadHandle` (the first parameter of `NtTerminateThread`) to a thread ID ([docs](http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtTerminateThread.html)).
+Oh... why is that thread (`0608`) terminating another thread suspiciously near where the `062c` thread stops working... We could assume that it is killing our thread, but let's figure it out if it is really `0608` the one that's assassinating the thread at COLD BLOOD.
 
-To do that, we need to scavenge the logs to figure out WHERE the thread was created, and after a while, we find it here!
+To track it down, we need to figure out how to convert the `ThreadHandle` (the first parameter of `NtTerminateThread`) to a thread ID ([docs](http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtTerminateThread.html)), so we need to scavenge the logs to figure out WHERE the thread was created.
+
+By searching for `CreateThread.*00000134`, we get the following result.
 
 ```
 21094.108:0608:Ret  ntdll.NtCreateThreadEx() retval=00000000 ret=7b515098
@@ -130,7 +132,7 @@ To do that, we need to scavenge the logs to figure out WHERE the thread was crea
 21094.108:062c:Call wow64.Wow64LdrpInitialize(1015bf820) ret=6fffffc03ad0
 ```
 
-The `retval` of the `CreateThread` is the `ThreadHandle` of the thread `062c`. We know it is for that specific thread by judging the timestamps between when the thread was created and when the `062c` thread started executing code.
+The `retval` of the `CreateThread` is the `ThreadHandle` of the thread `062c`. We can't be 100% sure that it is for that specific thread, because nothing binds the thread creation to the thread ID, but judging the timestamps between when the thread was created and when the `062c` thread started executing code, we can be fairly certain that this is it.
 
 You may be wondering "why does the game call `ResumeThread` if the thread was created right now???", it is because...
 
@@ -140,7 +142,9 @@ You may be wondering "why does the game call `ResumeThread` if the thread was cr
 
 The [fifth parameter](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createthread) is `CREATE_SUSPENDED`. So the game creates the thread in suspended mode, configures the thread, then resumes it.
 
-Okay, so now we know (somewhat) what is causing the issue: Thread `0608` tries to `TerminateThread` thread `062c` (`ThreadHandle` = `00000134`) and, because `062c` is in the middle of a thread shutdown, it causes locks to not be released. In fact, in the Windows' docs [TerminateThread is considered harmful](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminatethread).
+Okay, so now we know (somewhat) what is causing the issue: Thread `0608` tries to `TerminateThread` the thread `062c` (`ThreadHandle` = `00000134`) and, because `062c` is in the middle of a thread shutdown, it causes locks to not be released.
+
+In fact, in the Windows' docs [TerminateThread is considered harmful](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminatethread) for that *exactly* reason, that if you aren't 100% sure what is the other thread doing at the time of the termination, you may have unforeseen consequences.
 
 Is there's any way we can actually *see* the code? Thankfully, yes!
 
@@ -175,7 +179,7 @@ void __fastcall FUN_004c3460(undefined4 param_1,undefined4 param_2)
 }
 ```
 
-What would happen if we just... no-op'd the `TerminateThread` function?
+If the thread is already shutting down anyway, what would happen if we just... no-op'd the `TerminateThread` function?
 
 To do that, we know that in Ghidra the hex values for that `TerminateThread` function are
 
@@ -197,7 +201,9 @@ In a hex editor (I used ImHex), replace the `6a 00 53 2e ff 15 9c 85 55 00` sequ
 
 And that's all there's to it! :)
 
-The FIFA Road to World Cup 98 has the same lock up issue, I tried applying the same fix to it and, while it works *sometimes*, some other times it crashes with "SHOWDCT: No DCT chunks found!".
+You may wonder "Why not use [`WaitForSingleObject`](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)? It is the proper solution if you want to wait a thread to terminate!" and the answer is that I didn't notice any meaningful difference between no-op'ing the function call out and using `WaitForSingleObject`. It is also possible to do however, you can just track the function in Ghidra, check the PTR address of the function, then replace the function address on the opcode with the pointer. The `CALL` opcode uses little endian for the pointers, so you need to swap the bytes of the pointer.
+
+FIFA Road to World Cup 98 has the same lock up issue, I tried applying the same fix to it and, while it works *sometimes*, some other times it crashes with "SHOWDCT: No DCT chunks found!".
 
 A very hacky solution for this is to just... not call the function that handles the DCT chunks.
 
